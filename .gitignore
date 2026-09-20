@@ -1,9 +1,25 @@
-*.exe
-*.log
-out/
-scratch/
-.vs/
-.vscode/
+# Build output
 Release/
+Debug/
 x64/
 x86/
+out/
+*.exe
+*.dll
+*.lib
+*.obj
+*.pdb
+*.ilk
+*.exp
+
+# Logs
+*.log
+
+# Editors / IDEs
+.vs/
+.vscode/
+*.user
+*.suo
+
+# Scratch
+scratch/

@@ -1,55 +1,144 @@
 # Actions Per Minute Tracker
 
-An Actions Per Minute (APM) tracker to povide real-time stats on your actions per minute.
+An Actions Per Minute (APM) tracker that runs in the background and gives you
+real-time stats on your keyboard and mouse activity.
 
-![zoomed in](./zoomed_in.png)
+It shows a small always-on-top **APM overlay** on top of your game, plus a
+separate **graph window** that plots your APM over the whole session and shows
+session stats.
 
-This program runs in the background and creates a small "APM" window that sits on top of your game screen.
+![APM overlay](./zoomed_in.png)
 
-This project currently only supports Windows.
+This project currently only supports **Windows**.
 
-## Installation
+## Features
 
-### Windows
-
-Check out the [releases here][releases]. You probably want the win64 version.
-1. Download the .exe file (e.g. `ActionsPerMinuteTracker-win64.exe`)
-2. Run it to start tracking
-3. See your actions per minute in the upper right corner
-
-### Linux
-
-Not currently supported
-
-### From source
-
-1. Clone the repo
-2. Open in Visual Studio Code
-3. Build
+- Live APM overlay that floats on top of your game.
+- APM-over-time graph window (place it on a second monitor).
+- Session stats: elapsed time, current APM, session average, 5-minute average,
+  peak APM and total actions.
+- Session start/stop with a global hotkey, so you only record while you play.
+- No installation required — it is a single `.exe`.
 
 ## Examples
 
 ### Age of Empires 4
+
 ![Age of Empires 4 example with APM](./aoe4_example_apm.png)
 
 ### Dota 2
+
 ![Dota 2 example with APM](./dota_example_apm.png)
 
-[releases]: https://github.com/KlotzAndrew/actions-per-minute-tracker/releases
+## Requirements
 
-## Issues
+- Windows 10 or 11.
+- [LLVM / clang++](https://releases.llvm.org/) on your `PATH` (or installed to
+  the default `C:\Program Files\LLVM`). `clang++` automatically detects the
+  Visual Studio C++ headers/libraries and the Windows SDK, so no extra setup is
+  needed.
+- Alternatively, the [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
+  with the "Desktop development with C++" workload, if you prefer `cl`/MSBuild.
 
-### Windows warnings
+## Build
 
-The release exe files are not signed with a [Microsoft code signing certificate][code_signing]. This
-means there are some ugly warning messages when trying to download & run the program. If you click though
-them the program will run as expected
+From the repository root in PowerShell:
 
-The code singing certificates are expensive, so the only current workaround is to clone and compile the program yourself (reach out if you have other ideas!)
+```powershell
+.\build.ps1
+```
 
-![download warning](./warning_download.png)
+This compiles `main.cpp` and `counter.cpp` with `clang++` and produces:
 
-![run warning](./warning_run.png)
+```
+Release\win64\actions-per-minute-tracker.exe
+```
 
+For a debug build:
 
-[code_signing]: https://docs.microsoft.com/en-us/windows-hardware/drivers/dashboard/get-a-code-signing-certificate
+```powershell
+.\build.ps1 -Configuration Debug
+```
+
+You can also pass a custom output directory:
+
+```powershell
+.\build.ps1 -OutputDir .\out
+```
+
+If PowerShell blocks the script, run it with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\build.ps1
+```
+
+## Usage
+
+1. Run `Release\win64\actions-per-minute-tracker.exe`.
+2. The small **APM overlay** appears in the upper-right corner of the primary
+   screen, showing your current APM.
+3. The **graph window** opens on the secondary monitor if you have one
+   (otherwise on the primary monitor). It stays always on top. Drag it wherever
+   you like.
+4. The tracker starts **paused**. Press the session hotkey to begin recording.
+5. To quit, **close the graph window**. There is no console window.
+
+> The tracker runs as a background GUI application, so no console/terminal
+> window is shown when it starts.
+
+### Session control
+
+Press **Shift + Backspace** to start a session, and press it again to stop.
+Starting a new session clears the previous data. While stopped the graph and
+stats freeze so you can review the finished game, and the overlay shows the
+final APM.
+
+The graph header shows a state indicator:
+
+- `REC` (green) — a session is running and actions are being recorded.
+- `PAUSED` (amber) — recording is stopped.
+
+### Graph header
+
+| Field     | Meaning                                            |
+| --------- | -------------------------------------------------- |
+| `Time`    | Elapsed session time.                              |
+| `APM`     | Current APM (actions over the trailing 60s).       |
+| `Avg`     | Session average APM.                               |
+| `5m`      | Average APM over the last 5 minutes.               |
+| `Peak`    | Highest APM reached during the session.            |
+| `Actions` | Total keyboard + mouse actions this session.       |
+
+### Controls
+
+| Key                 | Action                        |
+| ------------------- | ----------------------------- |
+| `Shift` + `Backspace` | Start / stop the session.   |
+
+> The tracker uses a global low-level keyboard/mouse hook, so it counts actions
+> even when your game has focus. Because of that, you can leave it running in
+> the background the whole time.
+
+## Project structure
+
+```
+main.cpp      Window creation, input hooks, graph rendering
+counter.cpp   Thread-safe action counting and session statistics
+counter.h     Public API for the counter
+build.ps1     Build script (clang++)
+```
+
+## Troubleshooting
+
+### Windows SmartScreen warning
+
+The executable is not code-signed, so Windows may show a SmartScreen warning
+the first time you run it. Click **More info → Run anyway** to continue.
+
+![Download warning](./warning_download.png)
+
+![Run warning](./warning_run.png)
+
+## License
+
+Released under the [MIT License](./LICENSE).
