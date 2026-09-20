@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<!--
+  APM Tracker settings.
+
+  Copy this file to "settings.xml" next to the executable and edit as needed.
+  If settings.xml is missing, the tracker creates it with these defaults.
+
+  preset          "generic" or "aoe2". The aoe2 preset enables eAPM.
+  eapm            true/false. Enables the effective-APM approximation
+                  (ignores held-key auto-repeat). Implied by preset=aoe2.
+  hotkey          Session start/stop hotkey, e.g. "Shift+Backspace".
+                  Modifiers: Ctrl, Alt, Shift, Win. Keys: A-Z, 0-9, F1-F24,
+                  Backspace, Tab, Enter, Esc, Space, Delete, Insert, Home,
+                  End, PageUp, PageDown, arrows.
+  overlay_metric  "apm" or "eapm": which value the small overlay shows.
+  overlay         Overlay position/visibility. x/y of -1 means automatic.
+  graph           Graph window position/size. x/y of -1 means automatic.
+-->
+<settings>
+  <preset>aoe2</preset>
+  <eapm>true</eapm>
+  <hotkey>Shift+Backspace</hotkey>
+  <overlay_metric>apm</overlay_metric>
+  <overlay visible="true" x="-1" y="-1"/>
+  <graph x="-1" y="-1" width="760" height="290"/>
+</settings>

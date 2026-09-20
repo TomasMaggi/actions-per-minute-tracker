@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
     tags: ['v*']
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -16,6 +18,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Determine version
+        id: version
+        shell: pwsh
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          if (-not $version) { $version = '0.0.0' }
+          if ($env:GITHUB_REF -like 'refs/tags/v*') {
+            $version = $env:GITHUB_REF -replace '^refs/tags/v', ''
+          } else {
+            $short = $env:GITHUB_SHA.Substring(0, 7)
+            $version = "$version+$short"
+          }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
       - name: Ensure LLVM/clang++ is available
         shell: pwsh
         run: |
@@ -26,14 +42,26 @@ jobs:
             choco install llvm -y --no-progress
           }
 
-      - name: Build (Release x64)
+      - name: Check formatting
         shell: pwsh
-        run: ./build.ps1 -Configuration Release
+        run: |
+          $files = @('main.cpp','counter.cpp','counter.h','settings.cpp','settings.h',
+                     'session.cpp','session.h','log.cpp','log.h','tests/counter_tests.cpp')
+          $clangFormat = (Get-Command clang-format -ErrorAction SilentlyContinue).Source
+          if (-not $clangFormat) {
+            $clangFormat = Join-Path $env:ProgramFiles 'LLVM\bin\clang-format.exe'
+          }
+          & $clangFormat --dry-run --Werror @files
+          if ($LASTEXITCODE -ne 0) { throw "clang-format check failed" }
+
+      - name: Build and run tests
+        shell: pwsh
+        run: ./build.ps1 -Configuration Release -Test -Version "${{ steps.version.outputs.version }}"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: actions-per-minute-tracker-win64
+          name: actions-per-minute-tracker-win64-${{ steps.version.outputs.version }}
           path: Release/win64/actions-per-minute-tracker.exe
           if-no-files-found: error
 
@@ -41,6 +69,9 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
           files: Release/win64/actions-per-minute-tracker.exe
 
       - name: Publish latest release from main
@@ -48,9 +79,12 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: Latest build
+          name: Latest build (v${{ steps.version.outputs.version }})
           body: |
             Automatically built from the latest commit on `main`.
-            Commit: ${{ github.sha }}
+
+            - Version: `${{ steps.version.outputs.version }}`
+            - Commit: ${{ github.sha }}
           prerelease: false
+          fail_on_unmatched_files: true
           files: Release/win64/actions-per-minute-tracker.exe

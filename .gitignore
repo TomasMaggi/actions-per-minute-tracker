@@ -15,6 +15,10 @@ out/
 # Logs
 *.log
 
+# Runtime data
+sessions/
+settings.xml
+
 # Editors / IDEs
 .vs/
 .vscode/
