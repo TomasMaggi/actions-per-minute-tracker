@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <Package Name="APM Tracker"
+           Manufacturer="Tomas Maggi"
+           Version="$(Version)"
+           ProductCode="$(ProductCode)"
+           UpgradeCode="D08541EB-771F-413D-BF54-C90E7430B910"
+           Scope="perMachine"
+           Compressed="yes">
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of APM Tracker is already installed."
+                  AllowSameVersionUpgrades="yes" />
+    <MediaTemplate EmbedCab="yes" />
+
+    <ui:WixUI Id="WixUI_Minimal" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(LicenseRtf)" />
+
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch APM Tracker" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+
+    <CustomAction Id="LaunchApplication"
+                  FileRef="ApmExe"
+                  ExeCommand=""
+                  Return="asyncNoWait"
+                  Impersonate="yes" />
+    <InstallExecuteSequence>
+      <Custom Action="LaunchApplication"
+              After="InstallFinalize"
+              Condition="NOT Installed AND WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1" />
+    </InstallExecuteSequence>
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="APM Tracker" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="DesktopFolder">
+      <Component Id="DesktopShortcut" Guid="8C8C9CBD-01ED-47A0-A657-5AD6F11AFD5E">
+        <Shortcut Id="DesktopShortcut"
+                  Name="APM Tracker"
+                  Target="[INSTALLFOLDER]actions-per-minute-tracker.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKLM"
+                       Key="Software\APMTracker"
+                       Name="DesktopShortcut"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="APM Tracker" Level="1">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="DesktopShortcut" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <File Id="ApmExe" Source="$(BinDir)\actions-per-minute-tracker.exe" KeyPath="yes" />
+      <File Id="SettingsExample" Source="$(SourceDir)\settings.example.xml" />
+      <File Id="LicenseFile" Source="$(SourceDir)\LICENSE" />
+    </ComponentGroup>
+  </Fragment>
+</Wix>

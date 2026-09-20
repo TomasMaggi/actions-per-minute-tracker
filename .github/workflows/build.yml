@@ -30,7 +30,15 @@ jobs:
             $short = $env:GITHUB_SHA.Substring(0, 7)
             $version = "$version+$short"
           }
+          $msiVersion = ($version -split '\+')[0]
+
+          $md5 = [System.Security.Cryptography.MD5]::Create()
+          $hash = $md5.ComputeHash([Text.Encoding]::UTF8.GetBytes("APM Tracker $env:GITHUB_SHA"))
+          $productCode = ([guid]::new([byte[]]$hash)).ToString().ToUpper()
+
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "msi_version=$msiVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "product_code=$productCode" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Ensure LLVM/clang++ is available
         shell: pwsh
@@ -58,12 +66,35 @@ jobs:
         shell: pwsh
         run: ./build.ps1 -Configuration Release -Test -Version "${{ steps.version.outputs.version }}"
 
-      - name: Upload build artifact
+      - name: Build installer (MSI)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          dotnet tool uninstall --global wix 2>$null | Out-Null
+          dotnet tool install --global wix --version 5.0.2
+          $ErrorActionPreference = 'Stop'
+          ./installer/build-installer.ps1 `
+            -Version "${{ steps.version.outputs.version }}" `
+            -ProductCode "${{ steps.version.outputs.product_code }}"
+
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: actions-per-minute-tracker-win64-${{ steps.version.outputs.version }}
-          path: Release/win64/actions-per-minute-tracker.exe
+          name: apm-tracker-win64-${{ steps.version.outputs.version }}
+          path: |
+            Release/win64/actions-per-minute-tracker.exe
+            Release/win64/apm-tracker-*.msi
           if-no-files-found: error
+
+      - name: Remove stale portable exe from latest release
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete-asset latest actions-per-minute-tracker.exe `
+            --repo "${{ github.repository }}" --yes 2>$null
+          exit 0
 
       - name: Publish versioned release
         if: startsWith(github.ref, 'refs/tags/')
@@ -72,7 +103,7 @@ jobs:
           name: ${{ github.ref_name }}
           generate_release_notes: true
           fail_on_unmatched_files: true
-          files: Release/win64/actions-per-minute-tracker.exe
+          files: Release/win64/apm-tracker-*.msi
 
       - name: Publish latest release from main
         if: github.ref == 'refs/heads/main'
@@ -85,6 +116,6 @@ jobs:
 
             - Version: `${{ steps.version.outputs.version }}`
             - Commit: ${{ github.sha }}
-          prerelease: false
+          prerelease: true
           fail_on_unmatched_files: true
-          files: Release/win64/actions-per-minute-tracker.exe
+          files: Release/win64/apm-tracker-*.msi

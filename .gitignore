@@ -11,6 +11,8 @@ out/
 *.pdb
 *.ilk
 *.exp
+*.msi
+*.wixpdb
 
 # Logs
 *.log

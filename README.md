@@ -14,15 +14,52 @@ This project currently only supports **Windows**.
 
 ## Download
 
-Prebuilt Windows binaries are available on the [Releases page][releases]:
+Prebuilt Windows installers are available on the [Releases page][releases]:
 
-- **Latest build** — automatically rebuilt on every push to `main`.
+- **Latest build** — automatically rebuilt on every push to `main` (pre-release).
 - **`v*` tags** — versioned releases.
 
-Download `actions-per-minute-tracker.exe` from the latest release and run it —
-no installation required.
+Download `apm-tracker-<version>.msi` from a release and run it.
 
 [releases]: https://github.com/TomasMaggi/actions-per-minute-tracker/releases
+
+## Install
+
+1. Download `apm-tracker-<version>.msi` from the [Releases page][releases].
+2. Run it and accept the UAC prompt (it installs for all users).
+3. The installer places `actions-per-minute-tracker.exe` in
+   `C:\Program Files\APM Tracker\` and adds an **APM Tracker** shortcut to your
+   desktop.
+4. Tick **Launch APM Tracker** on the last page to start it right away.
+
+Silent install (no UI):
+
+```powershell
+msiexec /i apm-tracker-1.0.0.msi /qn
+```
+
+Uninstall from **Settings → Apps → Installed apps → APM Tracker**, or:
+
+```powershell
+msiexec /x apm-tracker-1.0.0.msi /qn
+```
+
+Uninstalling removes the program files but keeps your settings and sessions
+(see [Where data is stored](#where-data-is-stored)).
+
+### Where data is stored
+
+The tracker writes its settings, logs and session CSVs to
+`%APPDATA%\APM Tracker\`:
+
+- `settings.xml` — configuration (see [Configuration](#configuration)).
+- `apm-tracker.log` — log file.
+- `sessions\` — one CSV per finished session plus `index.csv`.
+
+**Portable mode:** if you place a file named `portable` (or a `settings.xml`)
+next to `actions-per-minute-tracker.exe`, the tracker stores its data in that
+folder instead. This is how the standalone exe built with `build.ps1` behaves
+when a `settings.xml` already sits next to it.
 
 ## Versioning
 
@@ -50,12 +87,15 @@ The CI workflow derives the release version automatically:
    ```
 
 CI then builds, tests, and publishes a release named `v1.1.0` with
-`actions-per-minute-tracker.exe` attached and auto-generated release notes.
+`apm-tracker-1.1.0.msi` attached and auto-generated release notes. The rolling
+`main` build is published as a **pre-release**, so the newest versioned tag stays
+as the "Latest" release.
 
 To build a specific version locally:
 
 ```powershell
 .\build.ps1 -Version 1.1.0
+.\installer\build-installer.ps1 -Version 1.1.0
 ```
 
 ## Features
@@ -70,7 +110,7 @@ To build a specific version locally:
 - Session start/stop with a configurable global hotkey, so you only record while
   you play.
 - Each session is saved to a CSV file you can review later.
-- No installation required — it is a single `.exe`.
+- Ships as an MSI installer (and can still be built/run as a portable exe).
 
 ## Requirements
 
@@ -108,9 +148,22 @@ Other options:
 powershell -ExecutionPolicy Bypass -File .\build.ps1   # if script execution is blocked
 ```
 
+### Build the installer
+
+The MSI is built with [WiX](https://wixtoolset.org/) (installed as a .NET tool,
+no Visual Studio required):
+
+```powershell
+dotnet tool install --global wix --version 5.0.2
+.\installer\build-installer.ps1
+```
+
+This produces `Release\win64\apm-tracker-<version>.msi`.
+
 ## Usage
 
-1. Run `Release\win64\actions-per-minute-tracker.exe`.
+1. Run `Release\win64\actions-per-minute-tracker.exe`, or after installing the
+   MSI launch **APM Tracker** from the desktop shortcut.
 2. The small **APM overlay** appears in the upper-right corner of the primary
    screen, showing your current APM.
 3. The **graph window** opens on the secondary monitor if you have one
@@ -280,6 +333,7 @@ tests/counter_tests.cpp      Unit tests for the counter
 build.ps1                    Build script (clang++)
 VERSION                      Single source of truth for the version
 settings.example.xml         Commented settings template
+installer/                   WiX MSI installer (apm-tracker.wxs, license.rtf, build script)
 .github/workflows/build.yml  CI: format check, tests, builds, releases
 ```
 

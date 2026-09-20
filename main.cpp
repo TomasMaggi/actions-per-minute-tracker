@@ -8,6 +8,7 @@
 
 #include <Windows.h>
 #include <objbase.h>
+#include <shlobj.h>
 
 #include <algorithm>
 #include <atomic>
@@ -72,6 +73,37 @@ static std::string baseName(const std::string &path)
 {
     size_t slash = path.find_last_of("\\/");
     return slash == std::string::npos ? path : path.substr(slash + 1);
+}
+
+static bool fileExists(const std::wstring &path)
+{
+    DWORD attributes = GetFileAttributesW(path.c_str());
+    return attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY);
+}
+
+// User data (settings, sessions, log) lives in %APPDATA%\APM Tracker by default
+// so a per-machine install under Program Files stays writable. Dropping a
+// "portable" marker (or a settings.xml) next to the exe keeps it portable.
+static std::wstring resolveDataDir(const std::wstring &exeDir)
+{
+    if (fileExists(exeDir + L"\\portable") || fileExists(exeDir + L"\\settings.xml"))
+        return exeDir;
+
+    PWSTR appData = nullptr;
+    std::wstring dataDir;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &appData)))
+    {
+        dataDir = appData;
+        CoTaskMemFree(appData);
+        dataDir += L"\\APM Tracker";
+    }
+    else
+    {
+        dataDir = exeDir;
+    }
+
+    CreateDirectoryW(dataDir.c_str(), nullptr);
+    return dataDir;
 }
 
 void tick()
@@ -552,13 +584,15 @@ int main()
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
     std::wstring exeDir = getExeDirectory();
-    std::string exeDirA = narrow(exeDir);
-    std::string settingsPath = exeDirA + "\\settings.xml";
-    std::string logPath = exeDirA + "\\apm-tracker.log";
-    g_sessionsDir = exeDirA + "\\sessions";
+    std::wstring dataDir = resolveDataDir(exeDir);
+    std::string dataDirA = narrow(dataDir);
+    std::string settingsPath = dataDirA + "\\settings.xml";
+    std::string logPath = dataDirA + "\\apm-tracker.log";
+    g_sessionsDir = dataDirA + "\\sessions";
 
     initLog(logPath);
     logMessage("info", std::string("APM Tracker v") + APM_VERSION_STRING + " starting");
+    logMessage("info", "Data directory: " + dataDirA);
 
     if (!loadSettings(settingsPath, g_settings))
     {

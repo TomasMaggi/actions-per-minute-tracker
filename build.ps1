@@ -79,7 +79,7 @@ $exePath = Join-Path $OutputDir 'actions-per-minute-tracker.exe'
 $arguments = $commonFlags + @('-o', $exePath)
 $arguments += ('-DAPP_VERSION=' + $Version)
 $arguments += $sources
-$arguments += @('-luser32', '-lgdi32', '-lxmllite', '-lole32')
+$arguments += @('-luser32', '-lgdi32', '-lxmllite', '-lole32', '-lshell32')
 $arguments += @('-Wl,/subsystem:windows', '-Wl,/entry:mainCRTStartup')
 
 Write-Host "Compiling with $clangxx ($Configuration), version $Version..."
