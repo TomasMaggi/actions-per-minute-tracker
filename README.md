@@ -1,5 +1,7 @@
 # Actions Per Minute Tracker
 
+[![Build](https://github.com/TomasMaggi/actions-per-minute-tracker/actions/workflows/build.yml/badge.svg)](https://github.com/TomasMaggi/actions-per-minute-tracker/actions/workflows/build.yml)
+
 An Actions Per Minute (APM) tracker that runs in the background and gives you
 real-time stats on your keyboard and mouse activity.
 
@@ -7,9 +9,19 @@ It shows a small always-on-top **APM overlay** on top of your game, plus a
 separate **graph window** that plots your APM over the whole session and shows
 session stats.
 
-![APM overlay](./zoomed_in.png)
-
 This project currently only supports **Windows**.
+
+## Download
+
+Prebuilt Windows binaries are available on the [Releases page][releases]:
+
+- **Latest build** — automatically rebuilt on every push to `main`.
+- **`v*` tags** — versioned releases.
+
+Download `actions-per-minute-tracker.exe` from the latest release and run it —
+no installation required.
+
+[releases]: https://github.com/TomasMaggi/actions-per-minute-tracker/releases
 
 ## Features
 
@@ -20,16 +32,6 @@ This project currently only supports **Windows**.
 - Session start/stop with a global hotkey, so you only record while you play.
 - No installation required — it is a single `.exe`.
 
-## Examples
-
-### Age of Empires 4
-
-![Age of Empires 4 example with APM](./aoe4_example_apm.png)
-
-### Dota 2
-
-![Dota 2 example with APM](./dota_example_apm.png)
-
 ## Requirements
 
 - Windows 10 or 11.
@@ -37,8 +39,6 @@ This project currently only supports **Windows**.
   the default `C:\Program Files\LLVM`). `clang++` automatically detects the
   Visual Studio C++ headers/libraries and the Windows SDK, so no extra setup is
   needed.
-- Alternatively, the [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
-  with the "Desktop development with C++" workload, if you prefer `cl`/MSBuild.
 
 ## Build
 
@@ -122,10 +122,11 @@ The graph header shows a state indicator:
 ## Project structure
 
 ```
-main.cpp      Window creation, input hooks, graph rendering
-counter.cpp   Thread-safe action counting and session statistics
-counter.h     Public API for the counter
-build.ps1     Build script (clang++)
+main.cpp                     Window creation, input hooks, graph rendering
+counter.cpp                  Thread-safe action counting and session statistics
+counter.h                    Public API for the counter
+build.ps1                    Build script (clang++)
+.github/workflows/build.yml  CI: builds and publishes releases on push
 ```
 
 ## Troubleshooting
@@ -134,10 +135,6 @@ build.ps1     Build script (clang++)
 
 The executable is not code-signed, so Windows may show a SmartScreen warning
 the first time you run it. Click **More info → Run anyway** to continue.
-
-![Download warning](./warning_download.png)
-
-![Run warning](./warning_run.png)
 
 ## License
 

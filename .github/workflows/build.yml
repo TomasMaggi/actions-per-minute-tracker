@@ -1,0 +1,56 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure LLVM/clang++ is available
+        shell: pwsh
+        run: |
+          $onPath = Get-Command clang++ -ErrorAction SilentlyContinue
+          $fallback = Join-Path $env:ProgramFiles 'LLVM\bin\clang++.exe'
+          if (-not $onPath -and -not (Test-Path -LiteralPath $fallback)) {
+            Write-Host "clang++ not found, installing LLVM..."
+            choco install llvm -y --no-progress
+          }
+
+      - name: Build (Release x64)
+        shell: pwsh
+        run: ./build.ps1 -Configuration Release
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: actions-per-minute-tracker-win64
+          path: Release/win64/actions-per-minute-tracker.exe
+          if-no-files-found: error
+
+      - name: Publish versioned release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Release/win64/actions-per-minute-tracker.exe
+
+      - name: Publish latest release from main
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest build
+          body: |
+            Automatically built from the latest commit on `main`.
+            Commit: ${{ github.sha }}
+          prerelease: false
+          files: Release/win64/actions-per-minute-tracker.exe
