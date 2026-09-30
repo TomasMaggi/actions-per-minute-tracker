@@ -192,6 +192,20 @@ void applyTextSetting(const std::wstring &name, const std::wstring &value, Setti
         settings.overlayEapm = (text == "eapm");
     else if (key == "hotkey")
         parseHotkey(text, settings.hotkey);
+    else if (key == "replay_hotkey")
+        parseHotkey(text, settings.replayHotkey);
+    else if (key == "rec_analysis")
+        settings.recAnalysis = (text == "true" || text == "1");
+    else if (key == "rec_folder")
+        settings.recFolder = narrow(value);
+    else if (key == "eapm_dedup_ms")
+        settings.eapmDedupMs = std::atoi(text.c_str());
+    else if (key == "eapm_consecutive")
+        settings.eapmConsecutive = (text == "true" || text == "1");
+    else if (key == "eapm_ignore_game")
+        settings.eapmIgnoreGame = (text == "true" || text == "1");
+    else if (key == "live_eapm_debounce_ms")
+        settings.liveEapmDebounceMs = std::atoi(text.c_str());
 }
 
 void parseAttributes(IXmlReader *reader, const std::string &element, Settings &settings)
@@ -355,7 +369,11 @@ bool loadSettings(const std::string &path, Settings &settings)
             parseAttributes(reader, elementName, settings);
         }
         else if (elementName == "preset" || elementName == "eapm" ||
-                 elementName == "overlay_metric" || elementName == "hotkey")
+                 elementName == "overlay_metric" || elementName == "hotkey" ||
+                 elementName == "replay_hotkey" || elementName == "rec_analysis" ||
+                 elementName == "rec_folder" || elementName == "eapm_dedup_ms" ||
+                 elementName == "eapm_consecutive" || elementName == "eapm_ignore_game" ||
+                 elementName == "live_eapm_debounce_ms")
         {
             std::wstring value = readElementText(reader);
             applyTextSetting(name, value, settings);
@@ -389,6 +407,13 @@ bool saveSettings(const std::string &path, const Settings &settings)
     writeElement(writer, L"eapm", settings.eapm ? L"true" : L"false");
     writeElement(writer, L"hotkey", widen(formatHotkey(settings.hotkey)));
     writeElement(writer, L"overlay_metric", settings.overlayEapm ? L"eapm" : L"apm");
+    writeElement(writer, L"replay_hotkey", widen(formatHotkey(settings.replayHotkey)));
+    writeElement(writer, L"rec_analysis", settings.recAnalysis ? L"true" : L"false");
+    writeElement(writer, L"rec_folder", widen(settings.recFolder));
+    writeElement(writer, L"eapm_dedup_ms", toWide(settings.eapmDedupMs));
+    writeElement(writer, L"eapm_consecutive", settings.eapmConsecutive ? L"true" : L"false");
+    writeElement(writer, L"eapm_ignore_game", settings.eapmIgnoreGame ? L"true" : L"false");
+    writeElement(writer, L"live_eapm_debounce_ms", toWide(settings.liveEapmDebounceMs));
 
     writer->WriteStartElement(nullptr, L"overlay", nullptr);
     writeAttribute(writer, L"visible", settings.overlayVisible ? L"true" : L"false");

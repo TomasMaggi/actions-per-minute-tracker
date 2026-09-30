@@ -1,5 +1,7 @@
 ﻿#include "counter.h"
+#include "eapm.h"
 #include "log.h"
+#include "rec.h"
 #include "session.h"
 #include "settings.h"
 
@@ -13,6 +15,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -40,6 +43,17 @@ bool g_altDown = false;
 bool g_shiftDown = false;
 bool g_winDown = false;
 bool g_hotkeyHeld = false;
+bool g_replayHeld = false;
+
+std::mutex g_recMutex;
+RecStats g_recStats;
+std::string g_recSourcePath;
+std::string g_lastAnalyzedPath;
+std::atomic<bool> g_forceAnalyze(false);
+std::atomic<bool> g_recLive(false);
+
+int g_hoverX = -1;
+int g_hoverY = -1;
 
 static std::wstring widen(const std::string &text)
 {
@@ -193,25 +207,250 @@ static bool isHotkey(unsigned int vk)
     return vk == g_settings.hotkey.vk && modifiersMatch(g_settings.hotkey.modifiers);
 }
 
+static bool isReplayHotkey(unsigned int vk)
+{
+    return vk == g_settings.replayHotkey.vk && modifiersMatch(g_settings.replayHotkey.modifiers);
+}
+
+static std::wstring resolveRecFolder()
+{
+    if (!g_settings.recFolder.empty())
+        return widen(g_settings.recFolder);
+
+    PWSTR profile = nullptr;
+    std::wstring base;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Profile, 0, nullptr, &profile)))
+    {
+        base = profile;
+        CoTaskMemFree(profile);
+    }
+    else
+    {
+        return L"";
+    }
+
+    std::wstring root = base + L"\\Games\\Age of Empires 2 DE";
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((root + L"\\*").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE)
+        return L"";
+
+    std::wstring bestFolder;
+    std::wstring fallbackFolder;
+    FILETIME bestTime = {0, 0};
+
+    do
+    {
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+            continue;
+        std::wstring name = fd.cFileName;
+        if (name == L"." || name == L"..")
+            continue;
+
+        std::wstring savegame = root + L"\\" + name + L"\\savegame";
+        DWORD attr = GetFileAttributesW(savegame.c_str());
+        if (attr == INVALID_FILE_ATTRIBUTES || !(attr & FILE_ATTRIBUTE_DIRECTORY))
+            continue;
+
+        if (fallbackFolder.empty())
+            fallbackFolder = savegame;
+
+        WIN32_FIND_DATAW rd;
+        HANDLE rh = FindFirstFileW((savegame + L"\\*.aoe2record").c_str(), &rd);
+        if (rh == INVALID_HANDLE_VALUE)
+            continue;
+
+        do
+        {
+            if (!(rd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
+                CompareFileTime(&rd.ftLastWriteTime, &bestTime) > 0)
+            {
+                bestTime = rd.ftLastWriteTime;
+                bestFolder = savegame;
+            }
+        } while (FindNextFileW(rh, &rd));
+        FindClose(rh);
+    } while (FindNextFileW(h, &fd));
+
+    FindClose(h);
+
+    if (!bestFolder.empty())
+        return bestFolder;
+    return fallbackFolder;
+}
+
+static std::wstring findNewestRec(const std::wstring &dir)
+{
+    if (dir.empty())
+        return L"";
+
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((dir + L"\\*.aoe2record").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE)
+        return L"";
+
+    std::wstring newest;
+    FILETIME newestTime = {0, 0};
+    do
+    {
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+        {
+            if (CompareFileTime(&fd.ftLastWriteTime, &newestTime) > 0)
+            {
+                newestTime = fd.ftLastWriteTime;
+                newest = dir + L"\\" + fd.cFileName;
+            }
+        }
+    } while (FindNextFileW(h, &fd));
+
+    FindClose(h);
+    return newest;
+}
+
+static long long recFileSize(const std::wstring &path)
+{
+    WIN32_FILE_ATTRIBUTE_DATA attr;
+    if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &attr))
+        return -1;
+    return (static_cast<long long>(attr.nFileSizeHigh) << 32) | attr.nFileSizeLow;
+}
+
+void recWatcher()
+{
+    std::wstring folder = resolveRecFolder();
+    if (folder.empty())
+    {
+        logMessage("info", "Rec analysis: no replay folder found");
+        return;
+    }
+    logMessage("info", "Rec analysis folder: " + narrow(folder));
+
+    std::string livePath;
+    long long liveSize = -1;
+
+    while (keepRunning)
+    {
+        for (int i = 0; i < 10 && keepRunning; i++)
+            Sleep(100);
+        if (!keepRunning)
+            break;
+
+        if (!g_settings.recAnalysis)
+            continue;
+
+        bool force = g_forceAnalyze.exchange(false);
+        std::wstring newest = findNewestRec(folder);
+        if (newest.empty())
+        {
+            livePath.clear();
+            liveSize = -1;
+            g_recLive = false;
+            continue;
+        }
+
+        std::string path = narrow(newest);
+        long long size = recFileSize(newest);
+        if (size < 0)
+            continue;
+
+        bool samePath = (path == livePath);
+        bool grew = samePath && (size != liveSize);
+
+        // Live while the file is still growing. A brand-new path is treated as
+        // live for one poll so its final size can be confirmed next round.
+        bool isLive = !samePath || grew;
+
+        livePath = path;
+        liveSize = size;
+
+        RecParseResult rec;
+        if (!parseRecFile(path, rec, !samePath))
+            continue;
+
+        RecConfig recConfig;
+        recConfig.dedupMs = g_settings.eapmDedupMs;
+        recConfig.consecutive = g_settings.eapmConsecutive;
+        recConfig.ignoreGame = g_settings.eapmIgnoreGame;
+        RecStats stats = computeRecStats(rec, rec.recOwner, recConfig);
+        if (!stats.ok)
+            continue;
+
+        if (isLive)
+        {
+            // Mid-game: refresh the live readout, don't save or mark analyzed.
+            std::lock_guard<std::mutex> lock(g_recMutex);
+            g_recStats = stats;
+            g_recSourcePath = path;
+            g_recLive = true;
+            continue;
+        }
+
+        // File stopped growing: finished recording.
+        {
+            std::lock_guard<std::mutex> lock(g_recMutex);
+            if (!force && path == g_lastAnalyzedPath)
+                continue;
+        }
+
+        std::string csvPath;
+        saveRecCsv(g_sessionsDir, stats, csvPath);
+
+        {
+            std::lock_guard<std::mutex> lock(g_recMutex);
+            g_recStats = stats;
+            g_recSourcePath = path;
+            g_lastAnalyzedPath = path;
+            g_recLive = false;
+        }
+
+        logMessage("info", "Rec analyzed: " + path + " avgAPM=" + std::to_string(stats.avgApm) +
+                               " avgEAPM=" + std::to_string(stats.avgEapm));
+    }
+}
+
+static bool isModifierVk(unsigned int vk)
+{
+    switch (vk)
+    {
+    case VK_CONTROL:
+    case VK_LCONTROL:
+    case VK_RCONTROL:
+    case VK_MENU:
+    case VK_LMENU:
+    case VK_RMENU:
+    case VK_SHIFT:
+    case VK_LSHIFT:
+    case VK_RSHIFT:
+    case VK_LWIN:
+    case VK_RWIN:
+        return true;
+    default:
+        return false;
+    }
+}
+
 LRESULT mouseProc(int nCode, WPARAM wparam, LPARAM lparam)
 {
     if (nCode < 0)
-        return CallNextHookEx(eHook, nCode, wparam, lparam);
+        return CallNextHookEx(mHook, nCode, wparam, lparam);
 
     if (wparam == WM_LBUTTONDOWN || wparam == WM_RBUTTONDOWN || wparam == WM_XBUTTONDOWN ||
         wparam == WM_MBUTTONDOWN)
     {
         if (g_counter)
-            g_counter->addMouse(static_cast<unsigned int>(wparam));
+        {
+            MSLLHOOKSTRUCT *ms = reinterpret_cast<MSLLHOOKSTRUCT *>(lparam);
+            g_counter->addMouse(static_cast<unsigned int>(wparam), ms->pt.x, ms->pt.y);
+        }
     }
 
-    return CallNextHookEx(eHook, nCode, wparam, lparam);
+    return CallNextHookEx(mHook, nCode, wparam, lparam);
 }
 
 LRESULT keyboardProc(int nCode, WPARAM wparam, LPARAM lparam)
 {
     if (nCode < 0)
-        return CallNextHookEx(mHook, nCode, wparam, lparam);
+        return CallNextHookEx(eHook, nCode, wparam, lparam);
 
     KBDLLHOOKSTRUCT *kb = reinterpret_cast<KBDLLHOOKSTRUCT *>(lparam);
     unsigned int vk = kb->vkCode;
@@ -219,6 +458,7 @@ LRESULT keyboardProc(int nCode, WPARAM wparam, LPARAM lparam)
     if (wparam == WM_KEYDOWN || wparam == WM_SYSKEYDOWN)
     {
         bool hotkey = isHotkey(vk);
+        bool replay = isReplayHotkey(vk);
         updateModifier(vk, true);
 
         if (hotkey)
@@ -231,8 +471,18 @@ LRESULT keyboardProc(int nCode, WPARAM wparam, LPARAM lparam)
             return 1;
         }
 
+        if (replay)
+        {
+            if (!g_replayHeld)
+            {
+                g_replayHeld = true;
+                g_forceAnalyze = true;
+            }
+            return 1;
+        }
+
         if (g_counter)
-            g_counter->addKey(vk);
+            g_counter->addKey(vk, isModifierVk(vk));
     }
     else if (wparam == WM_KEYUP || wparam == WM_SYSKEYUP)
     {
@@ -241,6 +491,12 @@ LRESULT keyboardProc(int nCode, WPARAM wparam, LPARAM lparam)
         if (vk == g_settings.hotkey.vk && g_hotkeyHeld)
         {
             g_hotkeyHeld = false;
+            return 1;
+        }
+
+        if (vk == g_settings.replayHotkey.vk && g_replayHeld)
+        {
+            g_replayHeld = false;
             return 1;
         }
 
@@ -428,9 +684,38 @@ static void drawGraph(HDC hdc, int width, int height)
     SetBkMode(hdc, TRANSPARENT);
 
     const int padding = 8;
-    const int headerHeight = 44;
+    int headerHeight = 44;
     const int leftMargin = 44;
     const int bottomMargin = 16;
+
+    bool haveRec = false;
+    int recPlayerId = 0;
+    int recAvgApm = 0;
+    int recAvgEapm = 0;
+    int recAvg5mEapm = 0;
+    int recPeakEapm = 0;
+    long long recTotal = 0;
+    int recSeconds = 0;
+    std::vector<int> recApmTimeline;
+    std::vector<int> recEapmTimeline;
+    {
+        std::lock_guard<std::mutex> lock(g_recMutex);
+        if (g_recStats.ok)
+        {
+            haveRec = true;
+            recPlayerId = g_recStats.playerId;
+            recAvgApm = g_recStats.avgApm;
+            recAvgEapm = g_recStats.avgEapm;
+            recAvg5mEapm = g_recStats.avg5mEapm;
+            recPeakEapm = g_recStats.peakEapm;
+            recTotal = g_recStats.totalActions;
+            recSeconds = static_cast<int>(g_recStats.durationMs / 1000);
+            recApmTimeline = g_recStats.apmTimeline;
+            recEapmTimeline = g_recStats.eapmTimeline;
+        }
+    }
+    if (haveRec)
+        headerHeight = 64;
 
     std::string state = stats.active ? "REC" : "PAUSED";
     SetTextColor(hdc, stats.active ? RGB(80, 220, 120) : RGB(230, 180, 80));
@@ -454,6 +739,17 @@ static void drawGraph(HDC hdc, int width, int height)
     SetTextColor(hdc, RGB(170, 170, 200));
     drawText(hdc, padding, 24, line2);
 
+    if (haveRec)
+    {
+        std::string line3 = g_recLive ? "LIVE " : "Rec ";
+        line3 += "APM " + std::to_string(recAvgApm) + "   eAPM " + std::to_string(recAvgEapm) +
+                 "   5m " + std::to_string(recAvg5mEapm) + "   Peak " +
+                 std::to_string(recPeakEapm) + "   P" + std::to_string(recPlayerId) + "   " +
+                 formatNumber(recTotal) + "   (" + formatDuration(recSeconds) + ")";
+        SetTextColor(hdc, g_recLive ? RGB(120, 220, 150) : RGB(150, 150, 190));
+        drawText(hdc, padding, 42, line3);
+    }
+
     const int left = leftMargin;
     const int right = width - padding;
     const int top = headerHeight;
@@ -464,11 +760,21 @@ static void drawGraph(HDC hdc, int width, int height)
         return;
 
     int maxValue = 100;
-    for (const SecondSample &sample : stats.history)
+    if (haveRec)
     {
-        maxValue = std::max(maxValue, sample.raw);
-        if (stats.eapmEnabled)
-            maxValue = std::max(maxValue, sample.eapm);
+        for (int v : recApmTimeline)
+            maxValue = std::max(maxValue, v);
+        for (int v : recEapmTimeline)
+            maxValue = std::max(maxValue, v);
+    }
+    else
+    {
+        for (const SecondSample &sample : stats.history)
+        {
+            maxValue = std::max(maxValue, sample.raw);
+            if (stats.eapmEnabled)
+                maxValue = std::max(maxValue, sample.eapm);
+        }
     }
 
     int step = 100;
@@ -491,25 +797,125 @@ static void drawGraph(HDC hdc, int width, int height)
     SelectObject(hdc, oldPen);
     DeleteObject(gridPen);
 
-    drawText(hdc, left, bottom + 1, "0:00");
-    std::string endLabel = formatDuration(stats.elapsedSeconds);
+    int plotSeconds = haveRec ? (int)recApmTimeline.size() : stats.elapsedSeconds;
+    if (plotSeconds <= 0)
+        plotSeconds = 1;
+
+    // X-axis time ticks every 5 minutes.
+    const int tickInterval = 300;
+    SetTextColor(hdc, RGB(140, 140, 170));
+    for (int t = 0; t < plotSeconds; t += tickInterval)
+    {
+        int x = left + (int)(((long long)t * plotWidth) / plotSeconds);
+        HPEN tickPen = CreatePen(PS_SOLID, 1, RGB(90, 90, 110));
+        HPEN oldTick = (HPEN)SelectObject(hdc, tickPen);
+        MoveToEx(hdc, x, bottom, NULL);
+        LineTo(hdc, x, bottom - 4);
+        SelectObject(hdc, oldTick);
+        DeleteObject(tickPen);
+
+        std::string label = formatDuration(t);
+        int labelWidth = textWidth(hdc, label);
+        drawText(hdc, x - labelWidth / 2, bottom + 1, label);
+    }
+
+    std::string endLabel = formatDuration(plotSeconds);
     std::wstring wideEnd(endLabel.begin(), endLabel.end());
     SIZE endSize = {0, 0};
     GetTextExtentPoint32(hdc, wideEnd.c_str(), (int)wideEnd.size(), &endSize);
     TextOut(hdc, right - endSize.cx, bottom + 1, wideEnd.c_str(), (int)wideEnd.size());
 
-    if (stats.eapmEnabled)
+    if (haveRec)
     {
-        drawLine(hdc, metricValues(stats.history, true), left, bottom, plotWidth, plotHeight,
-                 maxValue, RGB(90, 200, 240));
+        drawLine(hdc, recEapmTimeline, left, bottom, plotWidth, plotHeight, maxValue,
+                 RGB(90, 200, 240));
         SetTextColor(hdc, RGB(90, 200, 240));
         drawText(hdc, right - textWidth(hdc, "eapm"), top + 2, "eapm");
+
+        drawLine(hdc, recApmTimeline, left, bottom, plotWidth, plotHeight, maxValue,
+                 RGB(80, 220, 120));
+        SetTextColor(hdc, RGB(80, 220, 120));
+        drawText(hdc, right - textWidth(hdc, "raw"), top + 16, "raw");
+    }
+    else
+    {
+        if (stats.eapmEnabled)
+        {
+            drawLine(hdc, metricValues(stats.history, true), left, bottom, plotWidth, plotHeight,
+                     maxValue, RGB(90, 200, 240));
+            SetTextColor(hdc, RGB(90, 200, 240));
+            drawText(hdc, right - textWidth(hdc, "eapm"), top + 2, "eapm");
+        }
+
+        drawLine(hdc, metricValues(stats.history, false), left, bottom, plotWidth, plotHeight,
+                 maxValue, RGB(80, 220, 120));
+        SetTextColor(hdc, RGB(80, 220, 120));
+        drawText(hdc, right - textWidth(hdc, "raw"), top + 2 + (stats.eapmEnabled ? 14 : 0), "raw");
     }
 
-    drawLine(hdc, metricValues(stats.history, false), left, bottom, plotWidth, plotHeight, maxValue,
-             RGB(80, 220, 120));
-    SetTextColor(hdc, RGB(80, 220, 120));
-    drawText(hdc, right - textWidth(hdc, "raw"), top + 2 + (stats.eapmEnabled ? 14 : 0), "raw");
+    // Hover crosshair + value readout at the pointed time.
+    if (g_hoverX >= left && g_hoverX <= right && g_hoverY >= top && g_hoverY <= bottom)
+    {
+        int t = (int)(((long long)(g_hoverX - left) * plotSeconds) / plotWidth);
+        if (t < 0)
+            t = 0;
+        if (t > plotSeconds - 1)
+            t = plotSeconds - 1;
+
+        int apm = 0;
+        int eapm = 0;
+        bool havePoint = false;
+        if (haveRec)
+        {
+            if (t >= 0 && t < (int)recApmTimeline.size())
+            {
+                apm = recApmTimeline[t];
+                eapm = recEapmTimeline[t];
+                havePoint = true;
+            }
+        }
+        else if (t >= 0 && t < (int)stats.history.size())
+        {
+            apm = stats.history[t].raw;
+            eapm = stats.history[t].eapm;
+            havePoint = true;
+        }
+
+        HPEN hoverPen = CreatePen(PS_SOLID, 1, RGB(220, 220, 220));
+        HPEN oldHover = (HPEN)SelectObject(hdc, hoverPen);
+        MoveToEx(hdc, g_hoverX, top, NULL);
+        LineTo(hdc, g_hoverX, bottom);
+        SelectObject(hdc, oldHover);
+        DeleteObject(hoverPen);
+
+        if (havePoint)
+        {
+            int dotY = bottom - (int)(((long long)eapm * plotHeight) / maxValue);
+            HBRUSH dot = CreateSolidBrush(RGB(255, 255, 255));
+            RECT dotRect = {g_hoverX - 3, dotY - 3, g_hoverX + 3, dotY + 3};
+            FillRect(hdc, &dotRect, dot);
+            DeleteObject(dot);
+
+            std::string hoverLabel = formatDuration(t) + "  APM " + std::to_string(apm) +
+                                     "  eAPM " + std::to_string(eapm);
+            int labelWidth = textWidth(hdc, hoverLabel);
+            int labelX = g_hoverX + 8;
+            if (labelX + labelWidth > right)
+                labelX = g_hoverX - labelWidth - 8;
+            int labelY = top + 4;
+
+            std::wstring wideLabel(hoverLabel.begin(), hoverLabel.end());
+            SIZE sz = {0, 0};
+            GetTextExtentPoint32(hdc, wideLabel.c_str(), (int)wideLabel.size(), &sz);
+            HBRUSH bg = CreateSolidBrush(RGB(20, 20, 28));
+            RECT bgRect = {labelX - 2, labelY - 1, labelX + sz.cx + 2, labelY + sz.cy + 1};
+            FillRect(hdc, &bgRect, bg);
+            DeleteObject(bg);
+
+            SetTextColor(hdc, RGB(230, 230, 240));
+            drawText(hdc, labelX, labelY, hoverLabel);
+        }
+    }
 }
 
 static LRESULT CALLBACK graphWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
@@ -548,6 +954,32 @@ static LRESULT CALLBACK graphWndProc(HWND hwnd, UINT message, WPARAM wParam, LPA
         return 1;
     case WM_TIMER:
     {
+        RECT rect;
+        GetClientRect(hwnd, &rect);
+        InvalidateRect(hwnd, &rect, FALSE);
+        break;
+    }
+    case WM_MOUSEMOVE:
+    {
+        g_hoverX = (int)(short)LOWORD(lParam);
+        g_hoverY = (int)(short)HIWORD(lParam);
+
+        TRACKMOUSEEVENT tme;
+        tme.cbSize = sizeof(TRACKMOUSEEVENT);
+        tme.dwFlags = TME_LEAVE;
+        tme.hwndTrack = hwnd;
+        tme.dwHoverTime = 0;
+        TrackMouseEvent(&tme);
+
+        RECT rect;
+        GetClientRect(hwnd, &rect);
+        InvalidateRect(hwnd, &rect, FALSE);
+        break;
+    }
+    case WM_MOUSELEAVE:
+    {
+        g_hoverX = -1;
+        g_hoverY = -1;
         RECT rect;
         GetClientRect(hwnd, &rect);
         InvalidateRect(hwnd, &rect, FALSE);
@@ -603,6 +1035,7 @@ int main()
     CounterConfig counterConfig;
     counterConfig.preset = g_settings.preset;
     counterConfig.eapm = g_settings.eapm || g_settings.preset == Preset::AoE2;
+    counterConfig.eapmDebounceMs = g_settings.liveEapmDebounceMs;
     Counter counter(counterConfig);
     g_counter = &counter;
 
@@ -708,6 +1141,7 @@ int main()
     }
 
     std::thread t(tick);
+    std::thread recThread(recWatcher);
 
     int timer = 500;
     SetTimer(hwnd, timer, timer, 0);
@@ -726,6 +1160,8 @@ int main()
     keepRunning = false;
     if (t.joinable())
         t.join();
+    if (recThread.joinable())
+        recThread.join();
 
     RECT overlayRect;
     if (GetWindowRect(hwnd, &overlayRect))

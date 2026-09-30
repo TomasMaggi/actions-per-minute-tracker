@@ -29,6 +29,13 @@ struct Settings
     int graphY = -1;
     int graphWidth = 760;
     int graphHeight = 290;
+    bool recAnalysis = true;
+    std::string recFolder;
+    int eapmDedupMs = 2000;
+    bool eapmConsecutive = false;
+    bool eapmIgnoreGame = true;
+    int liveEapmDebounceMs = 300;
+    Hotkey replayHotkey = {HotkeyModControl | HotkeyModShift, 0x52}; // Ctrl+Shift+R
 };
 
 bool loadSettings(const std::string &path, Settings &settings);

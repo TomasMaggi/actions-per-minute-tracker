@@ -107,6 +107,9 @@ To build a specific version locally:
   peak APM, key APM, click APM and total actions.
 - **eAPM (approx.)** — an effective-APM estimate for AoE2 that ignores held-key
   auto-repeat. Enabled by the `aoe2` preset.
+- **Post-game replay analysis** — when a game ends the tracker parses the newest
+  `.aoe2record` and shows the real APM / eAPM for your player, matching how
+  AoE2Insights computes it (redundant repeated commands are dropped).
 - Session start/stop with a configurable global hotkey, so you only record while
   you play.
 - Each session is saved to a CSV file you can review later.
@@ -252,6 +255,13 @@ following example shows an AoE2 setup:
 | `overlay_metric` | `apm`, `eapm`                | Which value the small overlay shows.                                    |
 | `overlay`        | `visible`, `x`, `y`          | Overlay visibility and position (`-1` = automatic, top-right).          |
 | `graph`          | `x`, `y`, `width`, `height`  | Graph window position and size (`-1` = automatic, secondary monitor).   |
+| `rec_analysis`   | `true`, `false`              | Analyze the newest `.aoe2record` after a game (default `true`).          |
+| `rec_folder`     | path                         | Replay folder override. Empty = auto-detect.                              |
+| `eapm_dedup_ms`  | milliseconds                 | eAPM dedup window: identical command within this time counts once (default `2000`). |
+| `eapm_consecutive` | `true`, `false`            | Drop only immediate repeats instead of any repeat within the window (default `false`). |
+| `eapm_ignore_game` | `true`, `false`           | Exclude GAME settings toggles from eAPM (default `true`).                 |
+| `live_eapm_debounce_ms` | milliseconds          | Dedup window for the live hook eAPM: repeated key/click within this time counts once (default `300`). |
+| `replay_hotkey`  | e.g. `Ctrl+Shift+R`          | Manually re-analyze the newest replay.                                    |
 
 Window positions are saved automatically when you close the tracker, so you can
 just drag the windows where you want them instead of editing `x`/`y` by hand.
@@ -318,18 +328,46 @@ Each finished session is written to `sessions\` next to the executable:
 
 AoE2's "effective APM" is not officially documented. This tracker uses a
 deliberately conservative estimate: it ignores **held-key auto-repeat** (only the
-first keydown of a held key counts). Mouse clicks are always counted. It is
-labeled as approximate and is only enabled by the `aoe2` preset (or `eapm`).
+first keydown of a held key counts), drops repeated keys/clicks within
+`live_eapm_debounce_ms`, and ignores modifier keys. It is labeled as approximate
+and is only enabled by the `aoe2` preset (or `eapm`).
+
+## Post-game replay analysis
+
+For the real number, the tracker reads the newest `.aoe2record` once a game ends
+(the game writes the replay to
+`%USERPROFILE%\Games\Age of Empires 2 DE\<profile>\savegame\`). It parses the
+recorded action stream for your player and computes:
+
+- **APM** — actions per minute, the raw command count.
+- **eAPM** — actions per minute with redundant commands dropped. A command is
+  redundant when an identical one (same type, target and selected units)
+  repeats within `eapm_dedup_ms`. GAME settings toggles are excluded when
+  `eapm_ignore_game` is set. This mirrors how AoE2Insights treats spam clicks
+  and repeated orders.
+
+Results appear as a `RecAPM ... eAPM ...` line plus an eAPM/APM timeline plot in
+the graph window, and are saved to `sessions\rec-<timestamp>.csv`. Press
+`replay_hotkey` (default `Ctrl+Shift+R`) to re-analyze the newest replay on
+demand.
+
+The replay parser is a minimal, self-contained port of the `aoc-mgz` DE body
+format. It reads only the operation stream, so it is resilient to game-patch
+changes in the header. If a recording cannot be parsed, the tracker falls back
+to the live hook estimate.
 
 ## Project structure
 
 ```
 main.cpp                     Windows, input hooks, graph/overlay rendering
 counter.cpp / counter.h      Counter class: raw/eAPM/key/mouse stats, sessions
+rec.cpp / rec.h              .aoe2record parser (DE operation stream)
+eapm.cpp / eapm.h            APM/eAPM computation with redundant-command dedup
+third_party/puff.*           Mark Adler's puff inflate (raw deflate header)
 settings.cpp / settings.h    settings.xml load/save (XmlLite)
 session.cpp / session.h      CSV session persistence
 log.cpp / log.h              Timestamped file logger
-tests/counter_tests.cpp      Unit tests for the counter
+tests/counter_tests.cpp      Unit tests for the counter and rec/eAPM logic
 build.ps1                    Build script (clang++)
 VERSION                      Single source of truth for the version
 settings.example.xml         Commented settings template

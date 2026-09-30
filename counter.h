@@ -1,6 +1,7 @@
 #pragma once
 
 #include <mutex>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -16,6 +17,7 @@ struct CounterConfig
     int averageWindowSeconds = 300;
     Preset preset = Preset::Generic;
     bool eapm = false;
+    int eapmDebounceMs = 300;
 };
 
 struct SecondSample
@@ -50,9 +52,9 @@ class Counter
   public:
     explicit Counter(const CounterConfig &config);
 
-    void addKey(unsigned int vk);
+    void addKey(unsigned int vk, bool modifier = false);
     void addKeyUp(unsigned int vk);
-    void addMouse(unsigned int button);
+    void addMouse(unsigned int button, int x, int y);
     void tick();
     void toggleSession();
     void reset();
@@ -72,10 +74,12 @@ class Counter
     std::vector<int> m_rawKeyPerSecond;
     std::vector<int> m_rawMousePerSecond;
     std::vector<int> m_eapmKeyPerSecond;
+    std::vector<int> m_eapmMousePerSecond;
 
     int m_rollingRawKey = 0;
     int m_rollingRawMouse = 0;
     int m_rollingEapmKey = 0;
+    int m_rollingEapmMouse = 0;
 
     int m_totalSeconds = 0;
     long long m_totalActions = 0;
@@ -84,4 +88,10 @@ class Counter
 
     std::vector<SecondSample> m_history;
     std::unordered_set<unsigned int> m_keysDown;
+
+    std::unordered_map<unsigned int, long long> m_lastKeyEapmMs;
+    int m_lastMouseButton = -1;
+    int m_lastMouseX = 0;
+    int m_lastMouseY = 0;
+    long long m_lastMouseEapmMs = -1;
 };

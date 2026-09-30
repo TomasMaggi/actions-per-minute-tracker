@@ -15,6 +15,18 @@
   overlay_metric  "apm" or "eapm": which value the small overlay shows.
   overlay         Overlay position/visibility. x/y of -1 means automatic.
   graph           Graph window position/size. x/y of -1 means automatic.
+  rec_analysis    true/false. Analyze the newest .aoe2record after a game
+                  to show real APM / eAPM (like AoE2Insights).
+  rec_folder      Optional replay folder override. Empty = auto-detect
+                  (%USERPROFILE%\Games\Age of Empires 2 DE\<profile>\savegame).
+  eapm_dedup_ms   Milliseconds within which an identical command is dropped
+                  from eAPM (default 2000).
+  eapm_consecutive true/false. Drop only immediate repeats (not any repeat
+                  within the window) when true.
+  eapm_ignore_game true/false. Exclude GAME settings toggles from eAPM.
+  live_eapm_debounce_ms Milliseconds within which a repeated key/click is
+                  dropped from the live hook eAPM (default 300).
+  replay_hotkey   Manual trigger to re-analyze the newest replay.
 -->
 <settings>
   <preset>aoe2</preset>
@@ -23,4 +35,11 @@
   <overlay_metric>apm</overlay_metric>
   <overlay visible="true" x="-1" y="-1"/>
   <graph x="-1" y="-1" width="760" height="290"/>
+  <rec_analysis>true</rec_analysis>
+  <rec_folder></rec_folder>
+  <eapm_dedup_ms>2000</eapm_dedup_ms>
+  <eapm_consecutive>false</eapm_consecutive>
+  <eapm_ignore_game>true</eapm_ignore_game>
+  <live_eapm_debounce_ms>300</live_eapm_debounce_ms>
+  <replay_hotkey>Ctrl+Shift+R</replay_hotkey>
 </settings>

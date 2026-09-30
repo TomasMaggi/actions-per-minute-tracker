@@ -1,12 +1,19 @@
 #include "counter.h"
 
 #include <algorithm>
+#include <chrono>
 
 namespace
 {
 int positive(int value)
 {
     return value < 0 ? 0 : value;
+}
+
+long long nowMs()
+{
+    using namespace std::chrono;
+    return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
 }
 } // namespace
 
@@ -20,6 +27,7 @@ Counter::Counter(const CounterConfig &config) : m_config(config)
     m_rawKeyPerSecond.assign(m_config.windowSeconds, 0);
     m_rawMousePerSecond.assign(m_config.windowSeconds, 0);
     m_eapmKeyPerSecond.assign(m_config.windowSeconds, 0);
+    m_eapmMousePerSecond.assign(m_config.windowSeconds, 0);
 }
 
 int Counter::scaled(int rollingCount, int elapsed) const
@@ -46,7 +54,7 @@ int Counter::trailingAverage(const std::vector<int> &samples, int count) const
     return static_cast<int>(sum / static_cast<long long>(samples.size() - start));
 }
 
-void Counter::addKey(unsigned int vk)
+void Counter::addKey(unsigned int vk, bool modifier)
 {
     const std::lock_guard<std::mutex> lock(m_mutex);
 
@@ -61,7 +69,17 @@ void Counter::addKey(unsigned int vk)
     m_rollingRawKey++;
     m_totalActions++;
 
-    if (!(m_config.eapm && repeat))
+    bool effective = !modifier && !repeat;
+    if (effective && m_config.eapmDebounceMs > 0)
+    {
+        long long now = nowMs();
+        auto it = m_lastKeyEapmMs.find(vk);
+        if (it != m_lastKeyEapmMs.end() && (now - it->second) < m_config.eapmDebounceMs)
+            effective = false;
+        m_lastKeyEapmMs[vk] = now;
+    }
+
+    if (!m_config.eapm || effective)
     {
         m_eapmKeyPerSecond[index]++;
         m_rollingEapmKey++;
@@ -75,7 +93,7 @@ void Counter::addKeyUp(unsigned int vk)
     m_keysDown.erase(vk);
 }
 
-void Counter::addMouse(unsigned int)
+void Counter::addMouse(unsigned int button, int x, int y)
 {
     const std::lock_guard<std::mutex> lock(m_mutex);
 
@@ -86,7 +104,27 @@ void Counter::addMouse(unsigned int)
     m_rawMousePerSecond[index]++;
     m_rollingRawMouse++;
     m_totalActions++;
-    m_totalEapmActions++;
+
+    bool effective = true;
+    if (m_config.eapm && m_config.eapmDebounceMs > 0)
+    {
+        long long now = nowMs();
+        if (m_lastMouseEapmMs >= 0 && (now - m_lastMouseEapmMs) < m_config.eapmDebounceMs &&
+            m_lastMouseButton == static_cast<int>(button) && std::abs(m_lastMouseX - x) <= 4 &&
+            std::abs(m_lastMouseY - y) <= 4)
+            effective = false;
+        m_lastMouseButton = static_cast<int>(button);
+        m_lastMouseX = x;
+        m_lastMouseY = y;
+        m_lastMouseEapmMs = now;
+    }
+
+    if (!m_config.eapm || effective)
+    {
+        m_eapmMousePerSecond[index]++;
+        m_rollingEapmMouse++;
+        m_totalEapmActions++;
+    }
 }
 
 void Counter::tick()
@@ -102,13 +140,15 @@ void Counter::tick()
     m_rollingRawKey -= m_rawKeyPerSecond[index];
     m_rollingRawMouse -= m_rawMousePerSecond[index];
     m_rollingEapmKey -= m_eapmKeyPerSecond[index];
+    m_rollingEapmMouse -= m_eapmMousePerSecond[index];
     m_rawKeyPerSecond[index] = 0;
     m_rawMousePerSecond[index] = 0;
     m_eapmKeyPerSecond[index] = 0;
+    m_eapmMousePerSecond[index] = 0;
 
     SecondSample sample;
     sample.raw = scaled(m_rollingRawKey + m_rollingRawMouse, m_totalSeconds);
-    sample.eapm = scaled(m_rollingEapmKey + m_rollingRawMouse, m_totalSeconds);
+    sample.eapm = scaled(m_rollingEapmKey + m_rollingEapmMouse, m_totalSeconds);
     sample.keyboard = scaled(m_rollingRawKey, m_totalSeconds);
     sample.mouse = scaled(m_rollingRawMouse, m_totalSeconds);
     m_history.push_back(sample);
@@ -119,16 +159,23 @@ void Counter::resetLocked()
     std::fill(m_rawKeyPerSecond.begin(), m_rawKeyPerSecond.end(), 0);
     std::fill(m_rawMousePerSecond.begin(), m_rawMousePerSecond.end(), 0);
     std::fill(m_eapmKeyPerSecond.begin(), m_eapmKeyPerSecond.end(), 0);
+    std::fill(m_eapmMousePerSecond.begin(), m_eapmMousePerSecond.end(), 0);
 
     m_rollingRawKey = 0;
     m_rollingRawMouse = 0;
     m_rollingEapmKey = 0;
+    m_rollingEapmMouse = 0;
 
     m_totalSeconds = 0;
     m_totalActions = 0;
     m_totalEapmActions = 0;
     m_history.clear();
     m_keysDown.clear();
+    m_lastKeyEapmMs.clear();
+    m_lastMouseButton = -1;
+    m_lastMouseX = 0;
+    m_lastMouseY = 0;
+    m_lastMouseEapmMs = -1;
 }
 
 void Counter::reset()
@@ -166,7 +213,7 @@ int Counter::currentApm() const
 int Counter::currentEapm() const
 {
     const std::lock_guard<std::mutex> lock(m_mutex);
-    return scaled(m_rollingEapmKey + m_rollingRawMouse, m_totalSeconds);
+    return scaled(m_rollingEapmKey + m_rollingEapmMouse, m_totalSeconds);
 }
 
 APMStats Counter::snapshot() const
@@ -176,7 +223,7 @@ APMStats Counter::snapshot() const
     APMStats stats;
     stats.history = m_history;
     stats.current = scaled(m_rollingRawKey + m_rollingRawMouse, m_totalSeconds);
-    stats.currentEapm = scaled(m_rollingEapmKey + m_rollingRawMouse, m_totalSeconds);
+    stats.currentEapm = scaled(m_rollingEapmKey + m_rollingEapmMouse, m_totalSeconds);
     stats.currentKeyboard = scaled(m_rollingRawKey, m_totalSeconds);
     stats.currentMouse = scaled(m_rollingRawMouse, m_totalSeconds);
     stats.elapsedSeconds = m_totalSeconds;

@@ -50,6 +50,9 @@ if ($Test) {
     $testExe = Join-Path $testDir 'counter_tests.exe'
     $testSources = @(
         (Join-Path $PSScriptRoot 'counter.cpp'),
+        (Join-Path $PSScriptRoot 'rec.cpp'),
+        (Join-Path $PSScriptRoot 'eapm.cpp'),
+        (Join-Path $PSScriptRoot 'third_party\puff.cpp'),
         (Join-Path $PSScriptRoot 'tests\counter_tests.cpp')
     )
 
@@ -67,7 +70,10 @@ $sources = @(
     (Join-Path $PSScriptRoot 'counter.cpp'),
     (Join-Path $PSScriptRoot 'settings.cpp'),
     (Join-Path $PSScriptRoot 'session.cpp'),
-    (Join-Path $PSScriptRoot 'log.cpp')
+    (Join-Path $PSScriptRoot 'log.cpp'),
+    (Join-Path $PSScriptRoot 'rec.cpp'),
+    (Join-Path $PSScriptRoot 'eapm.cpp'),
+    (Join-Path $PSScriptRoot 'third_party\puff.cpp')
 )
 
 if (-not (Test-Path -LiteralPath $OutputDir)) {

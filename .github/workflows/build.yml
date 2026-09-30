@@ -54,7 +54,8 @@ jobs:
         shell: pwsh
         run: |
           $files = @('main.cpp','counter.cpp','counter.h','settings.cpp','settings.h',
-                     'session.cpp','session.h','log.cpp','log.h','tests/counter_tests.cpp')
+                     'session.cpp','session.h','log.cpp','log.h','rec.cpp','rec.h',
+                     'eapm.cpp','eapm.h','tests/counter_tests.cpp')
           $clangFormat = (Get-Command clang-format -ErrorAction SilentlyContinue).Source
           if (-not $clangFormat) {
             $clangFormat = Join-Path $env:ProgramFiles 'LLVM\bin\clang-format.exe'

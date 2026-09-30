@@ -62,3 +62,37 @@ bool saveSessionCsv(const std::string &directory, const APMStats &stats, std::st
 
     return true;
 }
+
+bool saveRecCsv(const std::string &directory, const RecStats &stats, std::string &outPath)
+{
+    std::string stamp = timestampNow();
+    std::string sessionPath = directory + "\\rec-" + stamp + ".csv";
+
+    std::ofstream out(sessionPath, std::ios::trunc);
+    if (!out)
+        return false;
+
+    out << "# player_id=" << stats.playerId << "\n";
+    out << "# duration_seconds=" << (stats.durationMs / 1000) << "\n";
+    out << "# avg_apm=" << stats.avgApm << "\n";
+    out << "# avg_eapm=" << stats.avgEapm << "\n";
+    out << "# avg5m_apm=" << stats.avg5mApm << "\n";
+    out << "# avg5m_eapm=" << stats.avg5mEapm << "\n";
+    out << "# peak_apm=" << stats.peakApm << "\n";
+    out << "# peak_eapm=" << stats.peakEapm << "\n";
+    out << "# total_actions=" << stats.totalActions << "\n";
+    out << "# total_eapm=" << stats.totalEapm << "\n";
+    out << "second,apm,eapm\n";
+
+    size_t count = stats.apmTimeline.size() > stats.eapmTimeline.size() ? stats.apmTimeline.size()
+                                                                        : stats.eapmTimeline.size();
+    for (size_t i = 0; i < count; i++)
+    {
+        int apm = i < stats.apmTimeline.size() ? stats.apmTimeline[i] : 0;
+        int eapm = i < stats.eapmTimeline.size() ? stats.eapmTimeline[i] : 0;
+        out << (i + 1) << "," << apm << "," << eapm << "\n";
+    }
+    out.close();
+    outPath = sessionPath;
+    return true;
+}
