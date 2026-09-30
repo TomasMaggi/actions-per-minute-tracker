@@ -50,6 +50,7 @@ RecStats g_recStats;
 std::string g_recSourcePath;
 std::string g_lastAnalyzedPath;
 std::atomic<bool> g_forceAnalyze(false);
+std::atomic<bool> g_finalizeRec(false);
 std::atomic<bool> g_recLive(false);
 
 int g_hoverX = -1;
@@ -81,6 +82,17 @@ static std::wstring getExeDirectory()
     if (slash != std::wstring::npos)
         path = path.substr(0, slash);
     return path;
+}
+
+// App icon embedded from app.rc (resource id 1). Falls back to the generic
+// application icon when the resource is not present.
+static HICON appIcon(int size)
+{
+    HICON icon = static_cast<HICON>(
+        LoadImageW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(1), IMAGE_ICON, size, size, LR_SHARED));
+    if (!icon)
+        icon = LoadIconW(NULL, IDI_APPLICATION);
+    return icon;
 }
 
 static std::string baseName(const std::string &path)
@@ -143,10 +155,16 @@ static void onToggleSession()
     if (g_counter->active())
     {
         g_lastSaved.clear();
+        {
+            std::lock_guard<std::mutex> lock(g_recMutex);
+            g_recStats = RecStats();
+            g_recLive = false;
+        }
         logMessage("info", "Session started");
     }
     else
     {
+        g_finalizeRec = true;
         APMStats stats = g_counter->snapshot();
         std::string path;
         if (saveSessionCsv(g_sessionsDir, stats, path))
@@ -307,12 +325,40 @@ static std::wstring findNewestRec(const std::wstring &dir)
     return newest;
 }
 
-static long long recFileSize(const std::wstring &path)
+static bool recFileStamp(const std::wstring &path, long long &size, unsigned long long &writeTime)
 {
     WIN32_FILE_ATTRIBUTE_DATA attr;
     if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &attr))
-        return -1;
-    return (static_cast<long long>(attr.nFileSizeHigh) << 32) | attr.nFileSizeLow;
+        return false;
+    size = (static_cast<long long>(attr.nFileSizeHigh) << 32) | attr.nFileSizeLow;
+    writeTime = (static_cast<unsigned long long>(attr.ftLastWriteTime.dwHighDateTime) << 32) |
+                attr.ftLastWriteTime.dwLowDateTime;
+    return true;
+}
+
+static bool analyzeRecFile(const std::string &path, bool readSaveVersion, bool saveCsv,
+                           RecStats &outStats)
+{
+    RecParseResult rec;
+    if (!parseRecFile(path, rec, readSaveVersion))
+        return false;
+
+    RecConfig recConfig;
+    recConfig.dedupMs = g_settings.eapmDedupMs;
+    recConfig.consecutive = g_settings.eapmConsecutive;
+    recConfig.ignoreGame = g_settings.eapmIgnoreGame;
+    RecStats stats = computeRecStats(rec, rec.recOwner, recConfig);
+    if (!stats.ok)
+        return false;
+
+    if (saveCsv)
+    {
+        std::string csvPath;
+        saveRecCsv(g_sessionsDir, stats, csvPath);
+    }
+
+    outStats = stats;
+    return true;
 }
 
 void recWatcher()
@@ -325,8 +371,13 @@ void recWatcher()
     }
     logMessage("info", "Rec analysis folder: " + narrow(folder));
 
-    std::string livePath;
-    long long liveSize = -1;
+    // Only a recording that we have seen grow counts as a live match. A
+    // pre-existing finished replay is baselined and ignored, so the tracker
+    // waits for the next recording to start instead of reading an old one.
+    std::string trackedPath;
+    long long trackedSize = -1;
+    unsigned long long trackedTime = 0;
+    bool liveActive = false;
 
     while (keepRunning)
     {
@@ -342,69 +393,84 @@ void recWatcher()
         std::wstring newest = findNewestRec(folder);
         if (newest.empty())
         {
-            livePath.clear();
-            liveSize = -1;
-            g_recLive = false;
+            trackedPath.clear();
+            trackedSize = -1;
+            trackedTime = 0;
+            liveActive = false;
             continue;
         }
 
         std::string path = narrow(newest);
-        long long size = recFileSize(newest);
-        if (size < 0)
+        long long size = -1;
+        unsigned long long writeTime = 0;
+        if (!recFileStamp(newest, size, writeTime))
             continue;
 
-        bool samePath = (path == livePath);
-        bool grew = samePath && (size != liveSize);
-
-        // Live while the file is still growing. A brand-new path is treated as
-        // live for one poll so its final size can be confirmed next round.
-        bool isLive = !samePath || grew;
-
-        livePath = path;
-        liveSize = size;
-
-        RecParseResult rec;
-        if (!parseRecFile(path, rec, !samePath))
-            continue;
-
-        RecConfig recConfig;
-        recConfig.dedupMs = g_settings.eapmDedupMs;
-        recConfig.consecutive = g_settings.eapmConsecutive;
-        recConfig.ignoreGame = g_settings.eapmIgnoreGame;
-        RecStats stats = computeRecStats(rec, rec.recOwner, recConfig);
-        if (!stats.ok)
-            continue;
-
-        if (isLive)
+        if (path != trackedPath)
         {
-            // Mid-game: refresh the live readout, don't save or mark analyzed.
-            std::lock_guard<std::mutex> lock(g_recMutex);
-            g_recStats = stats;
-            g_recSourcePath = path;
-            g_recLive = true;
+            trackedPath = path;
+            trackedSize = size;
+            trackedTime = writeTime;
+            liveActive = false;
             continue;
         }
 
-        // File stopped growing: finished recording.
+        bool grew = size > trackedSize || writeTime > trackedTime;
+        trackedSize = size;
+        trackedTime = writeTime;
+
+        if (grew)
         {
-            std::lock_guard<std::mutex> lock(g_recMutex);
-            if (!force && path == g_lastAnalyzedPath)
-                continue;
+            RecStats stats;
+            if (analyzeRecFile(path, false, false, stats))
+            {
+                std::lock_guard<std::mutex> lock(g_recMutex);
+                g_recStats = stats;
+                g_recSourcePath = path;
+                g_recLive = true;
+            }
+            liveActive = true;
         }
 
-        std::string csvPath;
-        saveRecCsv(g_sessionsDir, stats, csvPath);
-
+        // Finalize on demand (session stop) rather than on a growth pause, so a
+        // paused game is not mistaken for a finished one.
+        if (g_finalizeRec.exchange(false) && liveActive)
         {
-            std::lock_guard<std::mutex> lock(g_recMutex);
-            g_recStats = stats;
-            g_recSourcePath = path;
-            g_lastAnalyzedPath = path;
-            g_recLive = false;
+            RecStats stats;
+            if (analyzeRecFile(path, true, true, stats))
+            {
+                {
+                    std::lock_guard<std::mutex> lock(g_recMutex);
+                    g_recStats = stats;
+                    g_recSourcePath = path;
+                    g_lastAnalyzedPath = path;
+                    g_recLive = false;
+                }
+                logMessage("info", "Rec analyzed: " + path +
+                                       " avgAPM=" + std::to_string(stats.avgApm) +
+                                       " avgEAPM=" + std::to_string(stats.avgEapm));
+            }
+            liveActive = false;
         }
 
-        logMessage("info", "Rec analyzed: " + path + " avgAPM=" + std::to_string(stats.avgApm) +
-                               " avgEAPM=" + std::to_string(stats.avgEapm));
+        // Manual re-analyze (replay hotkey) still works on the newest replay.
+        if (force)
+        {
+            RecStats stats;
+            if (analyzeRecFile(path, true, true, stats))
+            {
+                {
+                    std::lock_guard<std::mutex> lock(g_recMutex);
+                    g_recStats = stats;
+                    g_recSourcePath = path;
+                    g_lastAnalyzedPath = path;
+                    g_recLive = false;
+                }
+                logMessage("info", "Rec re-analyzed: " + path +
+                                       " avgAPM=" + std::to_string(stats.avgApm) +
+                                       " avgEAPM=" + std::to_string(stats.avgEapm));
+            }
+        }
     }
 }
 
@@ -507,6 +573,61 @@ LRESULT keyboardProc(int nCode, WPARAM wparam, LPARAM lparam)
     return CallNextHookEx(mHook, nCode, wparam, lparam);
 }
 
+static std::wstring overlayText()
+{
+    int value = 0;
+    if (g_counter)
+        value = g_settings.overlayEapm ? g_counter->currentEapm() : g_counter->currentApm();
+
+    std::string text = std::to_string(value);
+    text += g_settings.overlayEapm ? " : eAPM " : " : APM ";
+    return std::wstring(text.begin(), text.end());
+}
+
+// Fit the overlay to its text and keep it inside the monitor work area. The
+// right edge stays put so the window grows leftward instead of off-screen.
+static void updateOverlayLayout(HWND hwnd)
+{
+    std::wstring wide = overlayText();
+
+    HDC hdc = GetDC(hwnd);
+    SIZE textSize = {0, 0};
+    GetTextExtentPoint32(hdc, wide.c_str(), (int)wide.size(), &textSize);
+    ReleaseDC(hwnd, hdc);
+
+    int width = textSize.cx + 12;
+    int height = textSize.cy + 6;
+
+    RECT windowRect;
+    GetWindowRect(hwnd, &windowRect);
+
+    RECT work = {0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)};
+    MONITORINFO info;
+    info.cbSize = sizeof(MONITORINFO);
+    HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    if (monitor && GetMonitorInfo(monitor, &info))
+        work = info.rcWork;
+
+    int left = windowRect.right - width;
+    int top = windowRect.top;
+    if (left + width > work.right)
+        left = work.right - width;
+    if (left < work.left)
+        left = work.left;
+    if (top + height > work.bottom)
+        top = work.bottom - height;
+    if (top < work.top)
+        top = work.top;
+
+    int currentWidth = windowRect.right - windowRect.left;
+    int currentHeight = windowRect.bottom - windowRect.top;
+    if (left != windowRect.left || top != windowRect.top || width != currentWidth ||
+        height != currentHeight)
+    {
+        SetWindowPos(hwnd, NULL, left, top, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+}
+
 static LRESULT CALLBACK wndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     switch (message)
@@ -518,22 +639,18 @@ static LRESULT CALLBACK wndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
 
         RECT rect;
         GetClientRect(hwnd, &rect);
+        rect.left += 6;
+        rect.right -= 6;
 
-        int value = 0;
-        if (g_counter)
-            value = g_settings.overlayEapm ? g_counter->currentEapm() : g_counter->currentApm();
-
-        std::string text = std::to_string(value);
-        text += g_settings.overlayEapm ? " : eAPM " : " : APM ";
-
-        std::wstring wide(text.begin(), text.end());
-        DrawText(hdc, wide.c_str(), -1, &rect, DT_RIGHT | DT_NOCLIP | DT_SINGLELINE | DT_VCENTER);
+        std::wstring wide = overlayText();
+        DrawText(hdc, wide.c_str(), -1, &rect, DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
 
         EndPaint(hwnd, &paintStruct);
         break;
     }
     case WM_TIMER:
     {
+        updateOverlayLayout(hwnd);
         RECT rect;
         GetClientRect(hwnd, &rect);
         InvalidateRect(hwnd, &rect, TRUE);
@@ -1034,7 +1151,8 @@ int main()
 
     CounterConfig counterConfig;
     counterConfig.preset = g_settings.preset;
-    counterConfig.eapm = g_settings.eapm || g_settings.preset == Preset::AoE2;
+    counterConfig.eapm =
+        g_settings.eapm || g_settings.overlayEapm || g_settings.preset == Preset::AoE2;
     counterConfig.eapmDebounceMs = g_settings.liveEapmDebounceMs;
     Counter counter(counterConfig);
     g_counter = &counter;
@@ -1046,6 +1164,8 @@ int main()
 
     HINSTANCE instance = GetModuleHandle(0);
     HCURSOR cursor = LoadCursor(0, IDC_ARROW);
+    HICON largeIcon = appIcon(GetSystemMetrics(SM_CXICON));
+    HICON smallIcon = appIcon(GetSystemMetrics(SM_CXSMICON));
 
     WNDCLASSEX wndclass = {
         sizeof(WNDCLASSEX),
@@ -1054,12 +1174,12 @@ int main()
         0,                                // extra bytes following window class
         0,                                // extra bytes following window instance
         instance,                         // hInstance
-        LoadIcon(0, IDI_APPLICATION),     // hIcon
+        largeIcon,                        // hIcon
         cursor,                           // hCursor
         HBRUSH(COLOR_WINDOW + 1),         // hbrBackground
         0,                                // MenuName
         TEXT("actions-per-minute-class"), // ClassName
-        LoadIcon(0, IDI_APPLICATION)      // small icon
+        smallIcon                         // small icon
     };
 
     if (!RegisterClassEx(&wndclass))
@@ -1081,22 +1201,24 @@ int main()
                                TEXT("actions-per-minute"), styles, overlayX, overlayY, overlayWidth,
                                overlayHeight, 0, 0, instance, NULL);
 
+    updateOverlayLayout(hwnd);
+
     if (!g_settings.overlayVisible)
         ShowWindow(hwnd, SW_HIDE);
 
     WNDCLASSEX graphClass = {
         sizeof(WNDCLASSEX),
-        CS_HREDRAW | CS_VREDRAW,      // style
-        graphWndProc,                 // window proc
-        0,                            // extra bytes following window class
-        0,                            // extra bytes following window instance
-        instance,                     // hInstance
-        LoadIcon(0, IDI_APPLICATION), // hIcon
-        cursor,                       // hCursor
-        HBRUSH(COLOR_WINDOW + 1),     // hbrBackground
-        0,                            // MenuName
-        TEXT("apm-graph-class"),      // ClassName
-        LoadIcon(0, IDI_APPLICATION)  // small icon
+        CS_HREDRAW | CS_VREDRAW,  // style
+        graphWndProc,             // window proc
+        0,                        // extra bytes following window class
+        0,                        // extra bytes following window instance
+        instance,                 // hInstance
+        largeIcon,                // hIcon
+        cursor,                   // hCursor
+        HBRUSH(COLOR_WINDOW + 1), // hbrBackground
+        0,                        // MenuName
+        TEXT("apm-graph-class"),  // ClassName
+        smallIcon                 // small icon
     };
 
     if (!RegisterClassEx(&graphClass))

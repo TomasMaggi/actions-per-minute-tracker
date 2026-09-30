@@ -1,9 +1,15 @@
 <?xml version="1.0"?>
 <!--
-  APM Tracker settings.
+  APM Tracker settings - reference template.
 
-  Copy this file to "settings.xml" next to the executable and edit as needed.
-  If settings.xml is missing, the tracker creates it with these defaults.
+  The tracker does NOT read this file. Copy the settings you want into
+  settings.xml and restart the tracker. settings.xml lives in:
+    - %APPDATA%\APM Tracker\settings.xml   (normal install), or
+    - next to the executable               (portable mode: also needs a file
+                                            named "portable", or a settings.xml
+                                            placed there)
+  If settings.xml is missing, the tracker creates it with the built-in
+  defaults (preset=generic, eapm=false).
 
   preset          "generic" or "aoe2". The aoe2 preset enables eAPM.
   eapm            true/false. Enables the effective-APM approximation
@@ -13,10 +19,12 @@
                   Backspace, Tab, Enter, Esc, Space, Delete, Insert, Home,
                   End, PageUp, PageDown, arrows.
   overlay_metric  "apm" or "eapm": which value the small overlay shows.
+                  "eapm" also enables eAPM.
   overlay         Overlay position/visibility. x/y of -1 means automatic.
   graph           Graph window position/size. x/y of -1 means automatic.
-  rec_analysis    true/false. Analyze the newest .aoe2record after a game
-                  to show real APM / eAPM (like AoE2Insights).
+  rec_analysis    true/false. Read the in-progress .aoe2record while a game
+                  runs to show live real APM / eAPM (like AoE2Insights), then
+                  save it when the session stops.
   rec_folder      Optional replay folder override. Empty = auto-detect
                   (%USERPROFILE%\Games\Age of Empires 2 DE\<profile>\savegame).
   eapm_dedup_ms   Milliseconds within which an identical command is dropped

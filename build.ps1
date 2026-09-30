@@ -32,6 +32,21 @@ function Resolve-Clangxx {
     throw "clang++ not found. Install LLVM or add it to PATH."
 }
 
+function Resolve-Rc {
+    $cmd = Get-Command llvm-rc -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+    $dirs = @()
+    if ($clangxx) { $dirs += (Split-Path -Parent $clangxx) }
+    $dirs += (Join-Path $env:ProgramFiles 'LLVM\bin')
+    foreach ($dir in $dirs) {
+        $candidate = Join-Path $dir 'llvm-rc.exe'
+        if (Test-Path -LiteralPath $candidate) { return $candidate }
+    }
+    $sdk = Get-Command rc.exe -ErrorAction SilentlyContinue
+    if ($sdk) { return $sdk.Source }
+    return $null
+}
+
 $clangxx = Resolve-Clangxx
 
 $commonFlags = @('-std=c++17', '-DUNICODE', '-D_UNICODE')
@@ -82,9 +97,29 @@ if (-not (Test-Path -LiteralPath $OutputDir)) {
 
 $exePath = Join-Path $OutputDir 'actions-per-minute-tracker.exe'
 
+# Embed the application icon declared in app.rc. Skipped (with a warning) when
+# the .ico is absent so the sources still build without it.
+$iconPath = Join-Path $PSScriptRoot 'actions-per-minute-tracker.ico'
+$resourceArgs = @()
+if (Test-Path -LiteralPath $iconPath) {
+    $rc = Resolve-Rc
+    if (-not $rc) {
+        throw "No resource compiler found. Install LLVM (llvm-rc) or the Windows SDK (rc.exe)."
+    }
+    $resPath = Join-Path $OutputDir 'app.res'
+    Write-Host "Compiling icon resource with $rc..."
+    & $rc /fo $resPath (Join-Path $PSScriptRoot 'app.rc')
+    if ($LASTEXITCODE -ne 0) { throw "Resource compile failed with exit code $LASTEXITCODE" }
+    $resourceArgs += $resPath
+}
+else {
+    Write-Warning "actions-per-minute-tracker.ico not found; building without an icon."
+}
+
 $arguments = $commonFlags + @('-o', $exePath)
 $arguments += ('-DAPP_VERSION=' + $Version)
 $arguments += $sources
+$arguments += $resourceArgs
 $arguments += @('-luser32', '-lgdi32', '-lxmllite', '-lole32', '-lshell32')
 $arguments += @('-Wl,/subsystem:windows', '-Wl,/entry:mainCRTStartup')
 

@@ -14,6 +14,9 @@
                   AllowSameVersionUpgrades="yes" />
     <MediaTemplate EmbedCab="yes" />
 
+    <Icon Id="ApmIcon" SourceFile="$(SourceDir)\actions-per-minute-tracker.ico" />
+    <Property Id="ARPPRODUCTICON" Value="ApmIcon" />
+
     <ui:WixUI Id="WixUI_Minimal" />
     <WixVariable Id="WixUILicenseRtf" Value="$(LicenseRtf)" />
 
@@ -40,6 +43,7 @@
         <Shortcut Id="DesktopShortcut"
                   Name="APM Tracker"
                   Target="[INSTALLFOLDER]actions-per-minute-tracker.exe"
+                  Icon="ApmIcon"
                   WorkingDirectory="INSTALLFOLDER" />
         <RegistryValue Root="HKLM"
                        Key="Software\APMTracker"
@@ -59,6 +63,7 @@
   <Fragment>
     <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
       <File Id="ApmExe" Source="$(BinDir)\actions-per-minute-tracker.exe" KeyPath="yes" />
+      <File Id="AppIconFile" Source="$(SourceDir)\actions-per-minute-tracker.ico" />
       <File Id="SettingsExample" Source="$(SourceDir)\settings.example.xml" />
       <File Id="LicenseFile" Source="$(SourceDir)\LICENSE" />
     </ComponentGroup>

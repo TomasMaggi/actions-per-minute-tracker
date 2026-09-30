@@ -107,9 +107,11 @@ To build a specific version locally:
   peak APM, key APM, click APM and total actions.
 - **eAPM (approx.)** — an effective-APM estimate for AoE2 that ignores held-key
   auto-repeat. Enabled by the `aoe2` preset.
-- **Post-game replay analysis** — when a game ends the tracker parses the newest
-  `.aoe2record` and shows the real APM / eAPM for your player, matching how
-  AoE2Insights computes it (redundant repeated commands are dropped).
+- **Live replay analysis** — while a game is being recorded the tracker parses
+  the growing `.aoe2record` and shows the real APM / eAPM for your player,
+  matching how AoE2Insights computes it (redundant repeated commands are
+  dropped). It waits for a new recording instead of reading old ones, and saves
+  the finished game when you stop the session.
 - Session start/stop with a configurable global hotkey, so you only record while
   you play.
 - Each session is saved to a CSV file you can review later.
@@ -209,18 +211,22 @@ eAPM.
 
 ## Configuration
 
-The tracker is configured through a file named `settings.xml` that lives **next
-to the executable**. It is created automatically with defaults the first time
-you run the tracker. A commented template is provided in
-[`settings.example.xml`](./settings.example.xml).
+The tracker is configured through a file named `settings.xml`. On a normal
+(installed) setup it lives in `%APPDATA%\APM Tracker\settings.xml` and is
+created automatically with defaults the first time you run the tracker. In
+portable mode (a `portable` marker, or a `settings.xml` placed next to the
+executable) it lives next to the executable instead. A commented template is
+provided in [`settings.example.xml`](./settings.example.xml) — the tracker
+never reads the example, so copy the values you want into `settings.xml`.
 
 ### How to change a setting
 
 1. **Close the tracker first.** Settings are read once at startup, so changes
    take effect only after you restart it. (Closing the tracker also writes the
    current window positions back to this file.)
-2. Open `settings.xml` in any text editor (Notepad works). If it does not exist
-   yet, run the tracker once, then close it.
+2. Open `settings.xml` in any text editor (Notepad works). It is in
+   `%APPDATA%\APM Tracker\` for a normal install, or next to the executable in
+   portable mode. If it does not exist yet, run the tracker once, then close it.
 3. Edit the values you want (see the table below).
 4. Save the file and start the tracker again.
 
@@ -252,10 +258,10 @@ following example shows an AoE2 setup:
 | `preset`         | `generic`, `aoe2`            | The `aoe2` preset enables eAPM.                                         |
 | `eapm`           | `true`, `false`              | Enables the effective-APM approximation (ignores held-key auto-repeat). |
 | `hotkey`         | e.g. `Shift+Backspace`       | Session start/stop hotkey (see below).                                  |
-| `overlay_metric` | `apm`, `eapm`                | Which value the small overlay shows.                                    |
+| `overlay_metric` | `apm`, `eapm`                | Which value the small overlay shows (`eapm` also enables eAPM).         |
 | `overlay`        | `visible`, `x`, `y`          | Overlay visibility and position (`-1` = automatic, top-right).          |
 | `graph`          | `x`, `y`, `width`, `height`  | Graph window position and size (`-1` = automatic, secondary monitor).   |
-| `rec_analysis`   | `true`, `false`              | Analyze the newest `.aoe2record` after a game (default `true`).          |
+| `rec_analysis`   | `true`, `false`              | Read the in-progress `.aoe2record` for live APM/eAPM; finalize on session stop (default `true`). |
 | `rec_folder`     | path                         | Replay folder override. Empty = auto-detect.                              |
 | `eapm_dedup_ms`  | milliseconds                 | eAPM dedup window: identical command within this time counts once (default `2000`). |
 | `eapm_consecutive` | `true`, `false`            | Drop only immediate repeats instead of any repeat within the window (default `false`). |
@@ -318,7 +324,9 @@ Reset both windows to their automatic positions:
 
 ## Sessions
 
-Each finished session is written to `sessions\` next to the executable:
+Each finished session is written to the `sessions\` folder in the data
+directory (`%APPDATA%\APM Tracker\sessions\`, or next to the executable in
+portable mode):
 
 - `sessions\YYYYMMDD-HHMMSS.csv` — a header with the summary plus one row per
   second (`second,raw,eapm,keyboard,mouse`).
@@ -332,12 +340,13 @@ first keydown of a held key counts), drops repeated keys/clicks within
 `live_eapm_debounce_ms`, and ignores modifier keys. It is labeled as approximate
 and is only enabled by the `aoe2` preset (or `eapm`).
 
-## Post-game replay analysis
+## Live replay analysis
 
-For the real number, the tracker reads the newest `.aoe2record` once a game ends
-(the game writes the replay to
-`%USERPROFILE%\Games\Age of Empires 2 DE\<profile>\savegame\`). It parses the
-recorded action stream for your player and computes:
+For the real number, the tracker watches the replay folder
+(`%USERPROFILE%\Games\Age of Empires 2 DE\<profile>\savegame\`) and starts
+reading as soon as a recording is being written (the file is growing). It never
+reads a pre-existing finished replay at startup, so it waits for the next game
+to begin. It parses the recorded action stream for your player and computes:
 
 - **APM** — actions per minute, the raw command count.
 - **eAPM** — actions per minute with redundant commands dropped. A command is
@@ -346,8 +355,11 @@ recorded action stream for your player and computes:
   `eapm_ignore_game` is set. This mirrors how AoE2Insights treats spam clicks
   and repeated orders.
 
-Results appear as a `RecAPM ... eAPM ...` line plus an eAPM/APM timeline plot in
-the graph window, and are saved to `sessions\rec-<timestamp>.csv`. Press
+Results appear as a `LIVE APM ... eAPM ...` line plus an eAPM/APM timeline plot
+in the graph window while the game runs. When you stop the session with the
+hotkey the final recording is analyzed and saved to
+`sessions\rec-<timestamp>.csv`, and the line switches to `Rec`. Pausing a game
+stops the file from growing, which is not treated as the end of the match. Press
 `replay_hotkey` (default `Ctrl+Shift+R`) to re-analyze the newest replay on
 demand.
 
@@ -368,6 +380,8 @@ settings.cpp / settings.h    settings.xml load/save (XmlLite)
 session.cpp / session.h      CSV session persistence
 log.cpp / log.h              Timestamped file logger
 tests/counter_tests.cpp      Unit tests for the counter and rec/eAPM logic
+actions-per-minute-tracker.ico  Application icon (embedded into the exe)
+app.rc                       Windows resource script: embeds the icon
 build.ps1                    Build script (clang++)
 VERSION                      Single source of truth for the version
 settings.example.xml         Commented settings template
@@ -384,8 +398,9 @@ the first time you run it. Click **More info → Run anyway** to continue.
 
 ### Where are the logs?
 
-The tracker writes `apm-tracker.log` next to the executable, including session
-start/stop events.
+The tracker writes `apm-tracker.log` in the data directory
+(`%APPDATA%\APM Tracker\`, or next to the executable in portable mode),
+including session start/stop events.
 
 ## License
 
